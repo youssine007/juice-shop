@@ -1,72 +1,46 @@
-name: SAST – CodeQL Security Scan
+name: SAST - CodeQL Security Scan
 
 on:
   push:
-    branches: ["**"]
   pull_request:
-    branches: ["**"]
   schedule:
-    - cron: "0 3 * * 1"
+    - cron: '0 6 * * 1'
 
 jobs:
-  codeql-analysis:
-    name: Analyze (${{ matrix.language }})
+  analyze:
+    name: Analyze (javascript)
     runs-on: ubuntu-latest
     permissions:
       security-events: write
-      actions: read
-      contents: read
-
     strategy:
-      fail-fast: false
       matrix:
-        language: ["javascript"]
-
+        language: [javascript]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          queries: security-and-quality
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:${{ matrix.language }}"
 
-  check-results:
+  block:
     name: Block on Vulnerabilities
+    needs: analyze
     runs-on: ubuntu-latest
-    needs: codeql-analysis
-    permissions:
-      security-events: read
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Check for high/critical alerts
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
+      - name: Check for vulnerabilities
         run: |
-          echo "Fetching open code scanning alerts (severity: high and critical)..."
-          ALERT_COUNT=$(gh api \
-            "repos/${REPO}/code-scanning/alerts?state=open&severity=high,critical&per_page=100" \
-            --jq 'length')
-
-          echo "High/Critical open alerts found: ${ALERT_COUNT}"
-
-          if [ "${ALERT_COUNT}" -gt "0" ]; then
-            echo "::error::Pipeline blocked – ${ALERT_COUNT} high/critical vulnerability alert(s) detected."
-            echo "Navigate to Security > Code scanning alerts to review findings."
+          ALERTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/code-scanning/alerts?state=open&per_page=100")
+          COUNT=$(echo "$ALERTS" | jq '[.[] | select(.rule.security_severity_level == "high" or .rule.security_severity_level == "critical")] | length')
+          echo "Found $COUNT high/critical vulnerability alert(s)"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "Pipeline blocked - $COUNT high/critical vulnerability alert(s) detected."
             exit 1
-          else
-            echo "No high/critical vulnerabilities found. Pipeline passes."
           fi
